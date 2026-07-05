@@ -8,6 +8,14 @@ live at https://mira-wm.com.
 A collaboration between General Intuition (https://www.generalintuition.com) and Kyutai
 (https://kyutai.org), with the dataset, models, and training and inference code all open-sourced.
 
+This repository contains the code accompanying our technical report,
+*MIRA: Multiplayer Interactive World Models with Representation Autoencoders*. The report introduces
+the first multiplayer world model for a highly dynamic environment governed by complex physical
+interactions: a 5-billion-parameter latent diffusion model, trained on 10,000 hours of gameplay, that
+conditions on all four players' action streams to faithfully simulate 2v2 Rocket League matches in
+real time. Everything needed to reproduce it lives here — the dataset loader, the video codec, the
+action-conditioned world model, and the training and inference pipelines.
+
 Code: https://github.com/mira-wm/mira
 Dataset: https://huggingface.co/datasets/kyutai/rocket-science
 
