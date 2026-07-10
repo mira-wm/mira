@@ -1,7 +1,7 @@
 ## MIRA: Multiplayer Interactive World Models with Representation Autoencoders
 
 [![Live demo](https://img.shields.io/badge/demo-mira--wm.com-0091FF.svg)](https://mira-wm.com)&nbsp;
-[![Paper](https://img.shields.io/badge/paper-technical%20report-b31b1b.svg)](https://github.com/mira-wm/mira)&nbsp;
+[![Paper](https://img.shields.io/badge/paper-technical%20report-b31b1b.svg)](https://arxiv.org/abs/2607.05352)&nbsp;
 [![Dataset](https://img.shields.io/badge/%F0%9F%A4%97%20dataset-rocket--science-yellow.svg)](https://huggingface.co/datasets/kyutai/rocket-science)&nbsp;
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
