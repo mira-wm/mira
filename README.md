@@ -21,8 +21,9 @@ This is the official code release for the technical report:<br>
 ```
 @article{mira2026,
   title={{MIRA}: Multiplayer Interactive World Models with Representation Autoencoders},
-  author={Hu, Anthony and Volhejn, V{\'a}clav and Ramanana Rahary, Adrien and Mulder, Chris and Makkar, Aditya and Royer, Am{\'e}lie and Liao, Alyx and Orsini, Manu and Jelley, Adam and Alonso, Eloi and Laurent, Florian and Nor{\'e}n, Fredrik and Swingos, James and H{\"u}nermann, Jan and Rollins, Kent and Hosseini, Lucas and Le Cauchois, Matthieu and Peter, Maxim and de Witte, Pim and Brown, Tim and Micheli, Vincent and B{\"o}hle, Moritz and de Marmiesse, Gabriel and Sharmanska, Viktoriia and Specia, Lucia and Black, Michael and P{\'e}rez, Patrick},
-  year={2026}
+  author={Hu, Anthony and Volhejn, V{\'a}clav and Ramanana Rahary, Adrien and Mulder, Chris and Makkar, Aditya and Liao, Alyx and Royer, Am{\'e}lie and Orsini, Manu and Jelley, Adam and Alonso, Eloi and Laurent, Florian and Nor{\'e}n, Fredrik and Swingos, James and H{\"u}nermann, Jan and Rollins, Kent and Hosseini, Lucas and Le Cauchois, Matthieu and Peter, Maxim and de Witte, Pim and Brown, Tim and Micheli, Vincent and B{\"o}hle, Moritz and de Marmiesse, Gabriel and Sharmanska, Viktoriia and Specia, Lucia and Black, Michael and P{\'e}rez, Patrick},
+  year={2026},
+  note={Technical Report},
 }
 ```
 
