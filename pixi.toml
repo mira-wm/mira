@@ -30,6 +30,8 @@ platforms = ["linux-64"]
 [activation.env]
 # Let torchcodec find pixi's FFmpeg shared libraries at runtime.
 LD_LIBRARY_PATH = "$PIXI_PROJECT_ROOT/.pixi/envs/default/lib:$LD_LIBRARY_PATH"
+# Ignore ~/.local/lib user-site packages, which can shadow env deps (e.g. a stale typing_extensions).
+PYTHONNOUSERSITE = "1"
 
 [dependencies]
 python = "3.12.*"
