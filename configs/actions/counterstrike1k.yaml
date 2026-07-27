@@ -1,0 +1,17 @@
+# CounterStrike-1K v9 action schema. Mouse movements are angular degrees and are emitted as
+# (delta_yaw, delta_pitch); buttons retain this exact bit order.
+source_fps: 32
+target_fps: 8
+valid_keys:
+  - FORWARD
+  - BACK
+  - LEFT
+  - RIGHT
+  - JUMP
+  - DUCK
+  - WALK
+  - FIRE
+  - RIGHTCLICK
+  - RELOAD
+  - INSPECT
+  - USE

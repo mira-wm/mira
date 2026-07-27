@@ -53,6 +53,9 @@ class LatentWorldModelConfig(BaseModel):
     use_clean_past: bool = False
 
     dropout_action_prob: float = 0.1
+    # Symmetric clamp/normalization scale for horizontal/vertical action deltas. Rocket League
+    # stores raw mouse dots (default 2048); CounterStrike-1K stores in-game angular degrees.
+    max_mouse_movement: float = 2048.0
     # Per-player subset-key action dropout (multiplayer): when on, a dropped (player-)row drops
     # either all keys or just the canonical subset (Q/E/Space/Shift/Ctrl). Default off -> legacy
     # whole-keyboard dropout, so single-player models are unchanged.

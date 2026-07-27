@@ -14,11 +14,26 @@ from einops import rearrange
 
 from mira.inference.rollout import measure_rollout_speed, rollout
 from mira.world_model.config import WorldModelInferenceConfig
+from mira.world_model.multi_wrapper_world_model import (
+    MultiWrapperWorldModel,
+    MultiWrapperWorldModelConfig,
+)
+from tests.world_model.conftest import StubCodec, tiny_config
 
 from .conftest import build_multi_wrapper, build_world_model, make_batch
 
 # noise_level=0.0 + a fixed schedule is the determinism contract; n_diffusion_steps kept small.
 DETERMINISTIC = WorldModelInferenceConfig(n_diffusion_steps=3, noise_level=0.0, schedule_type="linear")
+
+
+def _build_multi_wrapper_td2(monkeypatch, n_players: int) -> MultiWrapperWorldModel:
+    import mira.world_model.latent_world_model as lwm
+
+    monkeypatch.setattr(
+        lwm.VideoCodec, "load_from_checkpoint", staticmethod(lambda *args, **kwargs: StubCodec())
+    )
+    model = MultiWrapperWorldModel(MultiWrapperWorldModelConfig(n_players=n_players, wm_config=tiny_config()))
+    return model.eval()
 
 
 def test_rollout_single_is_deterministic(monkeypatch) -> None:
@@ -87,6 +102,23 @@ def test_rollout_matches_multi_inference_latents(monkeypatch) -> None:
     inference_out = model.inference(batch.clone(), config=DETERMINISTIC, progress_bar=False)
 
     # inference returns split-per-player latents; re-tile them to compare with the rollout buffer.
+    z_inference_tiled = rearrange(inference_out.z_t, "(b p) t h w c -> b t (p h) w c", p=n_players)
+    assert torch.equal(z_rollout, z_inference_tiled)
+
+
+def test_rollout_matches_multi_inference_latents_at_td2(monkeypatch) -> None:
+    """Pin the CS2 path where action temporal downsampling is 2 and the offset is non-zero."""
+    n_players = 2
+    model = _build_multi_wrapper_td2(monkeypatch, n_players=n_players)
+    assert model.temporal_downsampling == 2
+    assert model.single_world_model.action_temporal_downsampling == 2
+    batch = make_batch(batch_size=n_players)
+
+    torch.manual_seed(11)
+    z_rollout = rollout(model, batch.clone(), DETERMINISTIC)
+    torch.manual_seed(11)
+    inference_out = model.inference(batch.clone(), config=DETERMINISTIC, progress_bar=False)
+
     z_inference_tiled = rearrange(inference_out.z_t, "(b p) t h w c -> b t (p h) w c", p=n_players)
     assert torch.equal(z_rollout, z_inference_tiled)
 

@@ -9,7 +9,7 @@ distance uses ``scipy`` (imported lazily).
 from __future__ import annotations
 
 import logging
-from typing import Any, Literal
+from typing import Any
 
 import numpy as np
 import torch
@@ -20,9 +20,11 @@ from torch import Tensor
 from torchmetrics.functional.image import structural_similarity_index_measure
 
 from mira.codec.dino import (
+    DINO_DIM,
+    DINO_PATCH_SIZE,
+    DINO_REPOSITORY,
     IMAGENET_MEAN,
     IMAGENET_STD,
-    PATCH_SIZE,
     resolve_dino_weights,
 )
 
@@ -91,34 +93,37 @@ class DistributedSSIM(DistributedMetric):
 
 
 class DinoForMetrics(nn.Module):
-    """A frozen DINOv3 backbone exposing last-layer features for the Frechet-distance metric."""
+    """A frozen DINO backbone exposing last-layer features for the Frechet-distance metric."""
 
     dino_model: Any  # hub-loaded backbone; typed loosely as its API is dynamic
     mean: Tensor
     std: Tensor
 
-    def __init__(self, model_size: Literal["large", "base"] = "base"):
+    def __init__(self, model_name: str = "dinov3_vitb16"):
         super().__init__()
 
-        if model_size == "base":
-            model_name = "dinov3_vitb16"
-            self.dino_dim = 768
-        elif model_size == "large":
-            model_name = "dinov3_vitl16"
-            self.dino_dim = 1024
-        else:
-            raise ValueError(f"Model size {model_size} not supported.")
+        if model_name not in DINO_DIM:
+            raise ValueError(f"DINO model {model_name!r} is not supported")
+        self.dino_dim = DINO_DIM[model_name]
 
         logging.getLogger("dinov3").setLevel(logging.WARNING)  # suppress noisy dinov3 logging
-        logger.info(f"Loading DINOv3 model, variant {model_name}")
+        logger.info("Loading DINO metrics model, variant %s", model_name)
         weights = resolve_dino_weights(model_name)
-        self.dino_model = torch.hub.load(
-            repo_or_dir="facebookresearch/dinov3",
-            model=model_name,
-            weights=str(weights) if weights is not None else None,
-            source="github",
-            verbose=False,  # Get rid of "Using cache found in ..." message
-        )
+        hub_kwargs: dict[str, Any] = {
+            "repo_or_dir": DINO_REPOSITORY[model_name],
+            "model": model_name,
+            "source": "github",
+            "verbose": False,  # Get rid of "Using cache found in ..." message
+        }
+        if weights is not None:
+            self.dino_model = torch.hub.load(**hub_kwargs, weights=str(weights))
+        elif model_name.startswith("dinov2_"):
+            self.dino_model = torch.hub.load(**hub_kwargs, pretrained=True)
+        else:
+            raise FileNotFoundError(
+                f"DINOv3 metrics weights for {model_name} are unavailable. Set "
+                "RS_DINO_WEIGHTS_DIR or select the public dinov2_vitb14 metrics backbone."
+            )
 
         self.register_buffer(
             "mean", torch.tensor(IMAGENET_MEAN, dtype=torch.float)[None, :, None, None], persistent=False
@@ -126,7 +131,7 @@ class DinoForMetrics(nn.Module):
         self.register_buffer(
             "std", torch.tensor(IMAGENET_STD, dtype=torch.float)[None, :, None, None], persistent=False
         )
-        self.patch_size = PATCH_SIZE
+        self.patch_size = DINO_PATCH_SIZE[model_name]
 
         self.requires_grad_(False)
         self.eval()
@@ -142,7 +147,8 @@ class DinoForMetrics(nn.Module):
         x = self.image_normalization(x)
         new_height = self.patch_size * (h // self.patch_size)
         new_width = self.patch_size * (w // self.patch_size)
-        x = torch.nn.functional.interpolate(x, (new_height, new_width), mode="bilinear", antialias=True)
+        if (h, w) != (new_height, new_width):
+            x = torch.nn.functional.interpolate(x, (new_height, new_width), mode="bilinear", antialias=True)
 
         n = x.shape[0]
         if max_chunk_size is not None and n > max_chunk_size:

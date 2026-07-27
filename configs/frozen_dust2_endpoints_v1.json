@@ -1,0 +1,31 @@
+{
+  "artifacts": {
+    "codec/checkpoint-18000/checkpoint.pth": {
+      "bytes": 492223464,
+      "sha256": "3c286c59b74cd141e72af69cde1a0a005142d8d2b472c789cdf2a39a140c4b7a"
+    },
+    "codec/codec_config.yaml": {
+      "bytes": 3066,
+      "sha256": "1e560be4adfbfd9c6864ba0abc9de997e90f2d7156c8a535e4f687fa4c93ba0b"
+    },
+    "mira-single-step15000/checkpoint.pth": {
+      "bytes": 671594951,
+      "sha256": "3dbd8f0e43dbe833a5f36370d75f6306c7aa036dfcd3edba767ab138232fa047"
+    },
+    "mira-single-step15000/world_model_config.yaml": {
+      "bytes": 3563,
+      "sha256": "12c6073f745b377392597f8f94d794cf47f876e927506442d4c2cadedae5c492"
+    }
+  },
+  "bundle": {
+    "bytes": 1163837440,
+    "s3_uri": "s3://cs2-wm-rollout-preview-377114445113/mira-cs1k/frozen-checkpoints/20260726-dust2-single-confirmatory-15k-v1/mira-dust2-frozen-inputs-v1.tar",
+    "sha256": "198b53912948a53fd248f68cd7219d0526ab0965ab717eb59e18911c4a3664e2"
+  },
+  "created_at": "2026-07-27T00:43:35Z",
+  "schema": "mira-cs2-frozen-dust2-endpoints-v1",
+  "source": {
+    "mira_commit": "686d3213c3831dea265952b4ead3a79af6f6fb43",
+    "run": "20260726_dust2_single_confirmatory_15k_v1"
+  }
+}

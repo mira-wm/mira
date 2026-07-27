@@ -20,7 +20,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from itertools import count
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import torch
 from torch.utils.data import DataLoader, IterableDataset, get_worker_info
@@ -29,6 +29,12 @@ from mira.world_model.actions_config import ActionConfig, ActionTensors, stack_a
 
 from .actions import DEFAULT_RL_KEYS, KeyVocab
 from .batch import VideoActionBatch
+from .counterstrike import (
+    CS2_KEYS,
+    CS2_SOURCE_FPS,
+    CounterStrike1KIterable,
+    CounterStrikeWindowMode,
+)
 from .dataset import RocketScienceDataset
 
 
@@ -228,6 +234,11 @@ def _collate(samples: list[dict[str, Any]]) -> tuple[VideoActionBatch, list[Clip
 def create_loader(
     index_path: str | Path,
     *,
+    dataset_backend: Literal["rocket_science", "counterstrike1k"] = "rocket_science",
+    split: str = "train",
+    map_slug: str | None = None,
+    group_mode: Literal["single", "synchronized", "shuffled"] | None = None,
+    window_mode: CounterStrikeWindowMode = "midpoint",
     clip_len: int = 16,
     target_fps: int = 10,
     n_players: int = 1,
@@ -245,6 +256,7 @@ def create_loader(
     action_config: ActionConfig | None = None,
     prefetch_factor: int = 2,
     pin_memory: bool | None = None,
+    persistent_workers: bool = False,
 ) -> DataLoader:
     """Build a ``DataLoader`` yielding ``(VideoActionBatch, list[ClipMeta])`` from a dataset index.
 
@@ -254,6 +266,8 @@ def create_loader(
 
     Args:
         index_path: Path to a dataset directory or its ``index.json``.
+        window_mode: CounterStrike-1K window selection. ``midpoint`` is the fixed held-out default;
+            ``first-death`` centers each eligible synchronized round on its first death event.
         clip_len: Number of time steps per clip.
         target_fps: Frame rate the clips (and actions) are downsampled to.
         n_players: Perspectives grouped contiguously per row-block. ``1`` treats every perspective
@@ -281,10 +295,19 @@ def create_loader(
         action_config: Explicit ``ActionConfig``; built from ``valid_keys`` + fps when ``None``.
         prefetch_factor: Per-worker prefetch (only used when ``num_workers > 0``).
         pin_memory: Pin host memory; defaults to whether CUDA is available.
+        persistent_workers: Keep worker processes alive across iterator recreation. Requires
+            ``num_workers > 0``.
 
     Returns:
         A ``DataLoader`` over the dataset.
     """
+    if persistent_workers and num_workers == 0:
+        raise ValueError("persistent_workers=True requires num_workers > 0")
+
+    if dataset_backend == "counterstrike1k":
+        valid_keys = list(CS2_KEYS) if valid_keys is None else valid_keys
+        source_fps = CS2_SOURCE_FPS
+
     if action_config is None:
         action_config = ActionConfig(
             valid_keys=list(valid_keys) if valid_keys is not None else list(DEFAULT_RL_KEYS),
@@ -292,6 +315,37 @@ def create_loader(
             # The stored action rate follows action_fps when decoupled, else the frame rate.
             target_fps=action_fps if action_fps is not None else target_fps,
         )
+
+    if dataset_backend == "counterstrike1k":
+        dataset = CounterStrike1KIterable(
+            index_path,
+            action_config,
+            split=split,
+            map_slug=map_slug,
+            group_mode=group_mode or ("single" if n_players == 1 else "synchronized"),
+            window_mode=window_mode,
+            clip_len=clip_len,
+            target_fps=target_fps,
+            n_players=n_players,
+            frame_size=frame_size,
+            shuffle=shuffle,
+            infinite=infinite,
+            shuffle_buffer_size=shuffle_buffer_size,
+            seed=seed,
+        )
+        return DataLoader(
+            dataset,
+            batch_size=batch_size * n_players,
+            num_workers=num_workers,
+            prefetch_factor=prefetch_factor if num_workers > 0 else None,
+            pin_memory=torch.cuda.is_available() if pin_memory is None else pin_memory,
+            persistent_workers=persistent_workers,
+            collate_fn=_collate,
+        )
+    if dataset_backend != "rocket_science":
+        raise ValueError(f"Unknown dataset_backend={dataset_backend!r}")
+    if window_mode != "midpoint":
+        raise ValueError("window_mode is supported only by dataset_backend='counterstrike1k'")
 
     # Fail loudly up front if no clip in the dataset can satisfy `clip_len`: otherwise every match is
     # skipped as "too long for its chunks" and, with `infinite=True`, the stream loops over an empty
@@ -329,5 +383,6 @@ def create_loader(
         num_workers=num_workers,
         prefetch_factor=prefetch_factor if num_workers > 0 else None,
         pin_memory=torch.cuda.is_available() if pin_memory is None else pin_memory,
+        persistent_workers=persistent_workers,
         collate_fn=_collate,
     )

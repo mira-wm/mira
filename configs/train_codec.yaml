@@ -19,6 +19,7 @@ wandb:
 
 run:
   seed: 28
+  deterministic: false
   steps: 250_001
   batch_size: 4
   checkpoint_every: "5%"
@@ -26,6 +27,9 @@ run:
   checkpoint_keep_permanent_every: -1
   log_every: "1%"
   output_dir: "train_codec_logs"
+  # Optional wall-clock budget measured after dataloader warmup. A final resumable checkpoint is
+  # saved at the first completed step beyond this limit.
+  max_duration_hours: null
   compile: true
   # Crash recovery: path or W&B URL to resume the full training state from (continues the step
   # counter). Mutually exclusive with finetune_from.
@@ -39,6 +43,9 @@ run:
 dataloader:
   num_workers: 6
   shuffle_buffer_size: 100
+  prefetch_factor: 2
+  persistent_workers: false
+  pin_memory: null  # null follows CUDA availability
 
 validation:
   batch_size: null  # null to use the same batch size as training

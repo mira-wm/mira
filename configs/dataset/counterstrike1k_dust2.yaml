@@ -1,0 +1,22 @@
+# Materialized CounterStrike-1K 360p Dust2 subset. Both split paths point at the same root;
+# train_split/test_split select rows in the Parquet manifest.
+defaults:
+  - /actions@actions: counterstrike1k
+  - _self_
+
+backend: counterstrike1k
+train_index: null
+test_index: ${.train_index}
+train_split: train
+test_split: val
+map_slug: dust2
+
+# Codec and single-POV world model default. For shared MIRA override both this and the model to 10.
+n_players: 1
+group_mode: single
+# Optional evaluation-only override. When null, validation and periodic rollout metrics inherit
+# group_mode. Confirmatory synchronized-vs-shuffled training sets this to synchronized for both arms.
+validation_group_mode: null
+target_fps: 8
+frame_size: [168, 308]
+exclude_replays: false

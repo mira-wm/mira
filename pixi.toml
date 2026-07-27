@@ -41,9 +41,9 @@ uv = "*"
 # pin). torchcodec is installed in a second step from the CPU index: --torch-backend cu128 otherwise
 # pulls the CUDA-decode torchcodec build, which needs CUDA NPP libs (libnppicc.so.12) that are absent
 # on login/CPU nodes, so libtorchcodec fails to load there. --no-deps keeps torch on the cu128 build.
-setup = "uv pip install --python $CONDA_PREFIX/bin/python --torch-backend cu128 -e '.[viz,notebook,hf,train,dev]' 'torch==2.8.*' && uv pip install --python $CONDA_PREFIX/bin/python --no-deps torchcodec==0.7.0 --index-url https://download.pytorch.org/whl/cpu"
+setup = "uv pip install --python $CONDA_PREFIX/bin/python --torch-backend cu128 -e '.[viz,notebook,hf,train,eval,dev]' 'torch==2.8.*' && uv pip install --python $CONDA_PREFIX/bin/python --no-deps torchcodec==0.7.0 --index-url https://download.pytorch.org/whl/cpu"
 # CPU-only fallback for machines without an NVIDIA GPU.
-setup-cpu = "uv pip install --python $CONDA_PREFIX/bin/python --torch-backend cpu -e '.[decode,viz,notebook,hf,train,dev]' 'torch==2.8.*' torchcodec==0.7.0"
+setup-cpu = "uv pip install --python $CONDA_PREFIX/bin/python --torch-backend cpu -e '.[decode,viz,notebook,hf,train,eval,dev]' 'torch==2.8.*' torchcodec==0.7.0"
 explore = "marimo run examples/explore.py"
 edit = "marimo edit --headless --port 2718 examples/explore.py"
 test = "pytest -q"

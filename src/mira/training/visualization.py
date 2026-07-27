@@ -109,8 +109,17 @@ def draw_text_on_first_frame(video: Tensor, texts: list[str]) -> Tensor:
         draw = ImageDraw.Draw(img, "RGBA")
         try:
             font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 14)
-        except OSError:
-            font = ImageFont.load_default()
+        except (ImportError, OSError):
+            bitmap_font_loader = getattr(ImageFont, "load_default_imagefont", None)
+            if bitmap_font_loader is not None:
+                font = bitmap_font_loader()
+            else:
+                try:
+                    font = ImageFont.load_default()
+                except (ImportError, OSError):
+                    # Text is diagnostic metadata. Preserve the rollout itself on Pillow builds
+                    # that expose neither FreeType nor the bundled bitmap font.
+                    continue
         bbox = draw.textbbox((0, 0), text, font=font)
         text_w, text_h = bbox[2] - bbox[0], bbox[3] - bbox[1]
         padding = 4
@@ -146,7 +155,7 @@ def write_video_ffmpeg(
         "-i",
         "-",
     ]
-    out_args = [
+    preferred_out_args = [
         "-vcodec",
         video_codec,
         "-preset",
@@ -157,11 +166,55 @@ def write_video_ffmpeg(
         "yuv420p",
     ]
 
-    cmd = ["ffmpeg", "-y", *v_args, *out_args, str(filename)]
-    res = subprocess.run(cmd, input=video_np.tobytes(), capture_output=True, timeout=120)
+    cmd = ["ffmpeg", "-y", *v_args, *preferred_out_args, str(filename)]
+    res = subprocess.run(
+        cmd,
+        input=video_np.tobytes(),
+        capture_output=True,
+        timeout=120,
+        check=False,
+    )
 
-    if res.returncode:
-        raise RuntimeError(f"ffmpeg failed ({res.returncode}):\n{res.stderr.decode()}")
+    if not res.returncode:
+        return
+
+    preferred_error = res.stderr.decode(errors="replace")
+    codec_unavailable = (
+        video_codec == "libx264"
+        and (
+            "Unrecognized option 'preset'" in preferred_error
+            or "Option not found" in preferred_error
+            or "Unknown encoder 'libx264'" in preferred_error
+        )
+    )
+    if not codec_unavailable:
+        raise RuntimeError(f"ffmpeg failed ({res.returncode}):\n{preferred_error}")
+
+    # Some HPC FFmpeg builds intentionally omit libx264 and therefore do not recognize its
+    # private ``-preset``/``-crf`` options. MPEG-4 Part 2 is built into FFmpeg, works in an MP4
+    # container, and is sufficient for diagnostic rollout traces.
+    fallback_out_args = [
+        "-vcodec",
+        "mpeg4",
+        "-q:v",
+        "5",
+        "-pix_fmt",
+        "yuv420p",
+    ]
+    fallback_cmd = ["ffmpeg", "-y", *v_args, *fallback_out_args, str(filename)]
+    fallback_res = subprocess.run(
+        fallback_cmd,
+        input=video_np.tobytes(),
+        capture_output=True,
+        timeout=120,
+        check=False,
+    )
+    if fallback_res.returncode:
+        fallback_error = fallback_res.stderr.decode(errors="replace")
+        raise RuntimeError(
+            f"ffmpeg preferred codec failed ({res.returncode}):\n{preferred_error}\n"
+            f"ffmpeg MPEG-4 fallback failed ({fallback_res.returncode}):\n{fallback_error}"
+        )
 
 
 class VideoForWandb(BaseModel):

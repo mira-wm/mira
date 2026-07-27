@@ -11,7 +11,12 @@ if TYPE_CHECKING:
     from mira.world_model.latent_world_model import LatentWorldModel
 
 
-def load_world_model(checkpoint_path: Path, device: str | torch.device) -> tuple[LatentWorldModel, Any]:
+def load_world_model(
+    checkpoint_path: Path,
+    device: str | torch.device,
+    *,
+    codec_checkpoint: str | Path | None = None,
+) -> tuple[LatentWorldModel, Any]:
     """Load the right world-model class from a checkpoint dir.
 
     Dispatches on ``model.architecture._target_`` in the saved ``world_model_config.yaml`` and calls
@@ -37,5 +42,24 @@ def load_world_model(checkpoint_path: Path, device: str | torch.device) -> tuple
         if arch_target is not None and str(arch_target).endswith("MultiWrapperWorldModel")
         else LatentWorldModel
     )
+    if codec_checkpoint is not None:
+        codec_checkpoint = Path(codec_checkpoint).resolve()
+        config_key = (
+            "model.architecture.config.wm_config.codec_checkpoint"
+            if model_cls is MultiWrapperWorldModel
+            else "model.architecture.config.codec_checkpoint"
+        )
+        OmegaConf.update(cfg, config_key, str(codec_checkpoint), merge=False)
+
     # Both variants share the LatentWorldModel surface (duck-typed); annotate as such.
-    return cast("LatentWorldModel", model_cls.load_from_checkpoint(checkpoint_path, device=device)), cfg
+    return (
+        cast(
+            "LatentWorldModel",
+            model_cls.load_from_checkpoint(
+                checkpoint_path,
+                device=device,
+                codec_checkpoint=codec_checkpoint,
+            ),
+        ),
+        cfg,
+    )

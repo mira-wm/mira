@@ -62,3 +62,27 @@ def set_up_distributed() -> DistributedSettings:
     torch.distributed.init_process_group(backend, device_id=int(local_rank))
 
     return get_distributed_settings()
+
+
+def broadcast_main_process_bool(
+    value: bool,
+    *,
+    device: int | str | torch.device,
+) -> bool:
+    """Broadcast rank 0's boolean decision to every rank.
+
+    Wall-clock termination must be a collective decision. If each rank checks its own clock, one
+    rank can leave the training loop while peers enter the next DDP collective and hang forever.
+    Rank 0 is the authoritative timer so every process executes the same final optimizer step.
+    """
+    if not torch.distributed.is_available() or not torch.distributed.is_initialized():
+        return value
+
+    rank = torch.distributed.get_rank()
+    decision = torch.tensor(
+        int(value) if rank == 0 else 0,
+        dtype=torch.int32,
+        device=device,
+    )
+    torch.distributed.broadcast(decision, src=0)
+    return bool(decision.item())

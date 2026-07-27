@@ -1,4 +1,4 @@
-"""DINOv3 backbone loading for the frozen RAE encoder.
+"""DINO backbone loading for the frozen RAE encoder.
 
 The encoder's frozen feature extractor is a DINOv3 ViT loaded through ``torch.hub`` from the
 ``facebookresearch/dinov3`` repo. This requires network access (or a populated hub cache) the first
@@ -17,21 +17,36 @@ from __future__ import annotations
 import logging
 import os
 from pathlib import Path
-from typing import Any, List
+from typing import Any
 
 import torch
-import torch.nn as nn
 from einops import rearrange
-from torch import Tensor
+from torch import Tensor, nn
 
 logger = logging.getLogger(__name__)
 
 IMAGENET_MEAN = (0.485, 0.456, 0.406)
 IMAGENET_STD = (0.229, 0.224, 0.225)
+# Legacy default used by the standalone DINOv3 evaluation metric.
 PATCH_SIZE = 16
 DINO_DIM = {
+    "dinov2_vitb14": 768,
     "dinov3_vitl16": 1024,
     "dinov3_vitb16": 768,
+}
+DINO_PATCH_SIZE = {
+    "dinov2_vitb14": 14,
+    "dinov3_vitl16": 16,
+    "dinov3_vitb16": 16,
+}
+DINO_REPOSITORY = {
+    # Pin the hub source so every rank and every training seed executes identical backbone code.
+    # The previous floating default branch also made concurrent DDP cache population unsafe.
+    "dinov2_vitb14": (
+        "facebookresearch/dinov2:7764ea0f912e53c92e82eb78a2a1631e92725fc8"
+    ),
+    "dinov3_vitl16": "facebookresearch/dinov3",
+    "dinov3_vitb16": "facebookresearch/dinov3",
 }
 
 # Pretrained DINOv3 weight filenames, as published at
@@ -52,11 +67,15 @@ def resolve_dino_weights(dino_model: str) -> Path | None:
     weights_dir = os.environ.get("RS_DINO_WEIGHTS_DIR")
     if not weights_dir:
         return None
-    candidate = Path(weights_dir) / DINO_WEIGHT_FILENAMES[dino_model]
+    filename = DINO_WEIGHT_FILENAMES.get(dino_model)
+    if filename is None:
+        return None
+    candidate = Path(weights_dir) / filename
     return candidate if candidate.exists() else None
 
 
 DEFAULT_DINO_LAYERS = {
+    "dinov2_vitb14": (2, 5, 8, 11),
     "dinov3_vitl16": (2, 6, 10, 14, 18, 22),
     "dinov3_vitb16": (2, 5, 8, 11),
 }
@@ -94,18 +113,22 @@ class DinoModel(nn.Module):
             self.dino_model = preloaded_dino_module
         else:
             logging.getLogger("dinov3").setLevel(logging.WARNING)  # suppress noisy dinov3 logging
-            logger.info(f"Loading DINOv3 model, variant {dino_model}, {compile=}")
-            hub_kwargs: dict[str, Any] = dict(
-                repo_or_dir="facebookresearch/dinov3",
-                model=dino_model,
-                source="github",
-                verbose=False,  # Get rid of "Using cache found in ..." message
-            )
+            logger.info(f"Loading DINO model, variant {dino_model}, {compile=}")
+            hub_kwargs: dict[str, Any] = {
+                "repo_or_dir": DINO_REPOSITORY[dino_model],
+                "model": dino_model,
+                "source": "github",
+                "verbose": False,  # Get rid of "Using cache found in ..." message
+            }
             # Load pretrained weights from a local cache dir if RS_DINO_WEIGHTS_DIR provides one;
             # otherwise build without pretrained weights (restored from a codec checkpoint).
             weights_path = resolve_dino_weights(dino_model)
             if weights_path is not None:
                 self.dino_model = torch.hub.load(**hub_kwargs, weights=str(weights_path))
+            elif require_pretrained and dino_model.startswith("dinov2_"):
+                # DINOv2's public hub entry downloads its released checkpoint directly.
+                # This is the closest public fallback when gated DINOv3 access is unavailable.
+                self.dino_model = torch.hub.load(**hub_kwargs, pretrained=True)
             elif require_pretrained:
                 raise FileNotFoundError(
                     f"DINOv3 pretrained weights for {dino_model} not found. Set RS_DINO_WEIGHTS_DIR "
@@ -116,7 +139,7 @@ class DinoModel(nn.Module):
                 )
             else:
                 logger.info(
-                    "DINOv3 pretrained weights for %s not on disk; building with "
+                    "DINO pretrained weights for %s not loaded separately; building with "
                     "pretrained=False (the frozen backbone weights are restored from the "
                     "model checkpoint).",
                     dino_model,
@@ -137,7 +160,7 @@ class DinoModel(nn.Module):
             torch.tensor(IMAGENET_STD, dtype=torch.float)[None, :, None, None],
             persistent=False,
         )
-        self.patch_size = PATCH_SIZE
+        self.patch_size = DINO_PATCH_SIZE[dino_model]
 
         self.requires_grad_(False)
         self.eval()
@@ -145,13 +168,16 @@ class DinoModel(nn.Module):
     def image_normalization(self, x: torch.Tensor) -> torch.Tensor:
         return (x - self.mean) / self.std
 
-    def dino_forward(self, x: Tensor) -> List[Tensor]:
+    def dino_forward(self, x: Tensor) -> list[Tensor]:
         b, t, _, h, w = x.shape
         x = rearrange(x, "b t c h w -> (b t) c h w")  # x must be in [0, 1]
         x = self.image_normalization(x)
         new_height = self.patch_size * (h // self.patch_size)
         new_width = self.patch_size * (w // self.patch_size)
-        x = torch.nn.functional.interpolate(x, (new_height, new_width), mode="bilinear", antialias=True)
+        if (h, w) != (new_height, new_width):
+            x = torch.nn.functional.interpolate(
+                x, (new_height, new_width), mode="bilinear", antialias=True
+            )
 
         dino_features = self.dino_model.get_intermediate_layers(x, n=self.layers, norm=True, reshape=True)  # type: ignore
         dino_features = [

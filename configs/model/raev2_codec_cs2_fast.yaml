@@ -1,0 +1,53 @@
+# Small public-backbone codec for the urgent CounterStrike-1K rebuttal validation.
+#
+# This intentionally uses public DINOv2-B/14 because the target AWS account cannot download the
+# manually gated DINOv3 weights. At 168x308 with bottleneck stride 2, the latent grid is 6x11.
+loss:
+  _target_: mira.codec.CodecLoss
+  _convert_: all
+
+  weights:
+    _target_: mira.codec.CodecLossWeights
+    loss_mae: 1.0
+    loss_lpips_perceptual: 0.5
+    lpips_perceptual_frame_frac: 0.125
+    loss_dino_latent_consistency: 0.5
+    dino_latent_consistency_frame_frac: 0.125
+    compile_dino: ${run.compile}
+    auto_weight: true
+
+architecture:
+  _target_: mira.codec.VideoCodec
+  _convert_: all
+
+  config:
+    _target_: mira.codec.VideoCodecConfig
+    encoder:
+      latent_dim: 16
+      rae_model: dinov2_vitb14
+      aggregation_layers: [2, 5, 8, 11]
+      bottleneck:
+        stride: 2
+        temporal_stride: 2
+        noise_tau: 0.0
+      compile_dino: ${run.compile}
+      video:
+        height: 168
+        width: 308
+        channels: 3
+        timesteps: 16
+        fps: 8
+
+    decoder:
+      latent_dim: ${..encoder.latent_dim}
+      activation_checkpointing: true
+      bottleneck:
+        stride: ${...encoder.bottleneck.stride}
+      vit_width: 512
+      vit_depth: 8
+      vit_num_heads: 8
+      mlp_dim_multiplier: 4
+      qk_norm: layernorm
+      patch_size: 14
+      patch_size_t: 2
+      video: ${..encoder.video}

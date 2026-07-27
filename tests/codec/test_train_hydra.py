@@ -35,6 +35,9 @@ def test_train_codec_config_composes() -> None:
     assert cfg.model.loss.weights.loss_lpips_perceptual == 1.0
     assert cfg.model.loss.weights.loss_dino_latent_consistency == 1.0
     assert cfg.model.loss.weights.auto_weight is True
+    assert cfg.dataloader.prefetch_factor == 2
+    assert cfg.dataloader.persistent_workers is False
+    assert cfg.dataloader.pin_memory is None
 
 
 def test_loss_weights_instantiate() -> None:

@@ -19,6 +19,7 @@ wandb:
 
 run:
   seed: 28
+  deterministic: false
   steps: 250_001
   batch_size: 1
   checkpoint_every: "10%"
@@ -26,6 +27,9 @@ run:
   checkpoint_keep_permanent_every: -1
   log_every: "1%"
   output_dir: "train_world_model_logs"
+  # Optional wall-clock budget measured after dataloader warmup. A final resumable checkpoint is
+  # saved at the first completed step beyond this limit.
+  max_duration_hours: null
   # Opt-in; default off for reproducibility. When true, the codec encoder, diffusion transformer,
   # and codec decoder are compiled separately (the forward has data-dependent control flow).
   compile: false
@@ -39,12 +43,19 @@ run:
 dataloader:
   num_workers: 6
   shuffle_buffer_size: 100
+  prefetch_factor: 2
+  persistent_workers: false
+  pin_memory: null  # null follows CUDA availability
 
 validation:
   batch_size: null  # null to use the same batch size as training
   val_first: true
   val_n_samples: 1024
   val_every: "2%"
+  # Optional deterministic MP4 trace written beside the run at the specified step cadence. This is
+  # independent of W&B and of the heavier DINO/Inception downstream metrics.
+  local_rollout_every: null
+  local_rollout_seed: 37
   downstream_val_every: "10%"  # how often to run the world-model metrics eval
 
 optim:
@@ -80,4 +91,5 @@ world_model_metrics:
   eval_temporal_downsampling: null
   compile: ${run.compile}
   dino_max_chunk_size: 128  # max frames per DINO forward pass, reduces peak memory
+  dino_model: dinov3_vitb16
   num_viz_samples: 8  # how many eval samples to visualize (logged to W&B)

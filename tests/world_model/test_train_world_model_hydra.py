@@ -43,9 +43,7 @@ def _compose(overrides: list[str]):
 def test_train_world_model_config_composes() -> None:
     cfg = _compose(overrides=[])
     assert cfg.model.architecture._target_ == "mira.world_model.latent_world_model.LatentWorldModel"
-    assert (
-        cfg.model.architecture.config._target_ == "mira.world_model.config.LatentWorldModelConfig"
-    )
+    assert cfg.model.architecture.config._target_ == "mira.world_model.config.LatentWorldModelConfig"
     # Action vocabulary is interpolated from the dataset (9-key DEFAULT_RL_KEYS).
     assert len(cfg.actions.valid_keys) == 9
     assert cfg.dataset.n_players == 1
@@ -57,7 +55,30 @@ def test_train_world_model_config_composes() -> None:
     assert cfg.model.architecture.config.time_attention_every == 4
     # run.compile is opt-in (default off for reproducibility).
     assert cfg.run.compile is False
+    assert cfg.dataloader.prefetch_factor == 2
+    assert cfg.dataloader.persistent_workers is False
+    assert cfg.dataloader.pin_memory is None
+    assert cfg.validation.local_rollout_every is None
+    assert cfg.validation.local_rollout_seed == 37
     assert cfg.world_model_metrics._target_.endswith("WorldModelMetricsConfig")
+
+
+def test_counterstrike_config_exposes_evaluation_group_override() -> None:
+    cfg = _compose(overrides=["dataset=counterstrike1k_dust2"])
+    assert cfg.dataset.group_mode == "single"
+    assert cfg.dataset.validation_group_mode is None
+
+
+def test_counterstrike_shared_small_config_uses_spatial_action_routing() -> None:
+    cfg = _compose(
+        overrides=[
+            "dataset=counterstrike1k_dust2",
+            "model=multi_wrapper_world_model_cs2_small",
+        ]
+    )
+
+    assert cfg.model.architecture.config.n_players == 10
+    assert cfg.model.architecture.config.action_routing == "spatial"
 
 
 def test_world_model_metrics_config_instantiates() -> None:
@@ -71,6 +92,7 @@ def test_world_model_metrics_config_instantiates() -> None:
     assert wm_config.num_unrolled_frames == 20
     assert wm_config.drift_metric_frames == 20
     assert wm_config.fdd_slice_frames == 10
+    assert wm_config.dino_model == "dinov3_vitb16"
     assert wm_config.inference.schedule_type == "linear"
     assert wm_config.inference.noise_level == 0.0
 

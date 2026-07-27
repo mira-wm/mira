@@ -1,4 +1,4 @@
-"""Video decoding via torchcodec, from raw in-tar bytes.
+"""Video decoding via torchcodec, from raw in-tar bytes or a materialized MP4 path.
 
 Decode from mp4 bytes (no temp files); fetch exactly the requested frame indices. torch/torchcodec
 are imported lazily so the torch-free parts of the package (schema, events, clip enumeration) work
@@ -7,6 +7,7 @@ without them installed.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -14,7 +15,7 @@ if TYPE_CHECKING:
 
 
 def decode_frames(
-    video_bytes: bytes,
+    video_bytes: bytes | str | Path,
     frame_indices: list[int],
     frame_size: tuple[int, int] | None = None,
 ) -> torch.Tensor:

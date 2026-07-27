@@ -5,7 +5,7 @@ Public API:
     VideoCodec, VideoCodecOutputs — the codec module and its forward outputs
     RAEEncoder, RAEEncoderOutputs — frozen-DINOv3 + strided-conv bottleneck encoder
     ViTVideoDecoder — ViT video decoder
-    DinoModel, DinoPerceptualLoss, DINO_DIM — DINOv3 backbone loading + perceptual loss
+    DinoModel, DinoPerceptualLoss, DINO_DIM — DINO backbone loading + perceptual loss
     CodecLoss, CodecLossWeights — the codec training loss and its configuration
 """
 

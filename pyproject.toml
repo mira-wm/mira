@@ -38,12 +38,13 @@ train = [
     "rich",
     "torchmetrics",
     "termcolor",
+    "pyarrow>=14",
 ]
 # Offline world-model metrics: Frechet DINO/Inception (DINO loads via torch.hub). Heavy and
 # eval-only, deliberately kept out of `train`; the trainer's downstream-metrics eval logs and
 # skips when this isn't installed. Reads eval clips (decode) and builds the
 # model from its saved Hydra config.
-eval = ["mira[decode]", "mira[hydra]", "pytorch-fid", "scipy"]
+eval = ["mira[decode]", "mira[hydra]", "pytorch-fid==0.3.0", "scipy"]
 dev = ["pytest", "ruff", "pyright"]
 
 [build-system]

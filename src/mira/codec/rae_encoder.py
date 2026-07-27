@@ -1,4 +1,4 @@
-"""RAEv2 encoder: a frozen DINOv3 backbone, layer aggregation, and a strided-conv bottleneck."""
+"""RAEv2 encoder: a frozen DINO backbone, layer aggregation, and a strided-conv bottleneck."""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ class RAEEncoderOutputs:
 
 
 class RAEEncoder(nn.Module):
-    """Frozen DINOv3 backbone -> aggregation -> bottleneck -> latent."""
+    """Frozen DINO backbone -> aggregation -> bottleneck -> latent."""
 
     def __init__(self, config: RAEEncoderConfig, require_dino_weights: bool = True) -> None:
         """
@@ -71,7 +71,10 @@ class RAEEncoder(nn.Module):
         )
 
     def get_downsampling_factors(self) -> tuple[int, int]:
-        return self.config.bottleneck.temporal_stride, 16 * self.config.bottleneck.stride
+        return (
+            self.config.bottleneck.temporal_stride,
+            self.rae_dino.patch_size * self.config.bottleneck.stride,
+        )
 
     def forward(self, video: Tensor) -> RAEEncoderOutputs:
         # VideoCodec normalizes to [-1, 1]; DinoModel expects [0, 1].

@@ -115,6 +115,7 @@ class LatentWorldModel(nn.Module):
             dim=config.hidden_dim,
             temporal_downsampling=self.action_temporal_downsampling,
             dropout_prob=config.dropout_action_prob,
+            max_mouse_movement=config.max_mouse_movement,
             learned_temporal_pool=config.learned_temporal_pool,
             dropout_action_per_player=config.dropout_action_per_player,
             key_field_names=config.actions.valid_keys,
@@ -141,10 +142,11 @@ class LatentWorldModel(nn.Module):
 
     def diffusion_loss(self, z: Tensor, a: Tensor) -> dict[str, Tensor]:
         """Diagonal flow-matching loss given encoded latents ``z`` (b, t, h, w, c) and the action
-        embedding ``a``. This is the whole training tail; MultiWrapperWorldModel reuses it with a
-        tiled multi-player ``z`` and combined ``a`` so the loss logic cannot drift between the two
-        forwards. The bos repeat uses ``z.shape[0]`` so the tiled ``z`` (whose batch dim differs from
-        ``len(batch)``) is handled correctly."""
+        embedding ``a``. ``a`` is either global ``(b,t,d)`` conditioning or spatial
+        ``(b,t,h,w,d)`` conditioning aligned to ``z``. This is the whole training tail;
+        MultiWrapperWorldModel reuses it with a tiled multi-player ``z`` and routed ``a`` so the loss
+        logic cannot drift between the two forwards. The bos repeat uses ``z.shape[0]`` so the tiled
+        ``z`` (whose batch dim differs from ``len(batch)``) is handled correctly."""
         # The past frames are always clean (un-noised) latents.
         shifted_z = None
         if self.config.use_clean_past:
@@ -578,7 +580,12 @@ class LatentWorldModel(nn.Module):
 
     @classmethod
     def load_from_checkpoint(
-        cls, checkpoint_path: str | Path, device: str | torch.device | None = None, **kwargs
+        cls,
+        checkpoint_path: str | Path,
+        device: str | torch.device | None = None,
+        *,
+        codec_checkpoint: str | Path | None = None,
+        **kwargs,
     ) -> LatentWorldModel:
         from omegaconf import OmegaConf  # noqa: PLC0415 -- optional dep, used only here
 
@@ -592,9 +599,10 @@ class LatentWorldModel(nn.Module):
 
         # Load via OmegaConf (already a dependency) so the config's ${..} interpolations resolve.
         config_raw = OmegaConf.load(config_path)
-        config = LatentWorldModelConfig.model_validate(
-            _config_dict_from_yaml(config_raw.model.architecture.config)
-        )
+        config_dict = _config_dict_from_yaml(config_raw.model.architecture.config)
+        if codec_checkpoint is not None:
+            config_dict["codec_checkpoint"] = str(Path(codec_checkpoint).resolve())
+        config = LatentWorldModelConfig.model_validate(config_dict)
         model = cls(config)
         model.to(device)
 

@@ -12,11 +12,12 @@ Multi-GPU runs go through ``torchrun`` (the distributed setup no-ops for a singl
 from __future__ import annotations
 
 import contextlib
+import json
 import logging
 import time
 from collections import defaultdict
 from collections.abc import Iterator
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import hydra
@@ -36,10 +37,15 @@ from mira.codec.viz import (
 )
 from mira.data.training_loader import ClipMeta, create_loader
 from mira.training.checkpoint_manager import CheckpointManager
-from mira.training.distributed import get_distributed_settings, set_up_distributed
+from mira.training.distributed import (
+    broadcast_main_process_bool,
+    get_distributed_settings,
+    set_up_distributed,
+)
 from mira.training.ema import DistributedEMA
 from mira.training.lr_schedule import WarmupConstantCosineDecayLR
 from mira.training.metrics.distributed_metric import DistributedMetric
+from mira.training.reproducibility import seed_everything
 from mira.training.tracker import TrainingTracker, display_execution_time, periodic_event
 from mira.training.visualization import (
     VideoForWandb,
@@ -50,6 +56,24 @@ from mira.training.visualization import (
 logging.basicConfig(format="%(message)s", datefmt="[%X]", handlers=[RichHandler()])
 
 logger = logging.getLogger(__name__)
+
+
+def _jsonable(value):
+    if isinstance(value, torch.Tensor):
+        return value.detach().item() if value.numel() == 1 else value.detach().cpu().tolist()
+    if isinstance(value, Path):
+        return str(value)
+    return value
+
+
+def _log_jsonl(cfg: DictConfig, record: dict) -> None:
+    """Append a dependency-free local metrics record even when W&B is disabled/offline."""
+    path = Path(cfg.run.output_dir) / "metrics.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {key: _jsonable(value) for key, value in record.items()}
+    payload["timestamp_utc"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    with path.open("a", encoding="utf-8") as stream:
+        stream.write(json.dumps(payload, sort_keys=True) + "\n")
 
 
 def _autocast(device: int | str | torch.device):
@@ -70,7 +94,10 @@ def train(cfg: DictConfig) -> None:
     is_main_process = distributed_settings.is_main_process
     device = distributed_settings.device
 
-    torch.manual_seed(cfg.run.seed + distributed_settings.rank)
+    seed_everything(
+        cfg.run.seed + distributed_settings.rank,
+        deterministic=bool(cfg.run.get("deterministic", False)),
+    )
     logging.getLogger().setLevel(logging.INFO if is_main_process else logging.ERROR)
 
     logger.info("[magenta]" + "=" * 60 + "[/magenta]")
@@ -115,7 +142,6 @@ def train(cfg: DictConfig) -> None:
         lr_scheduler.step()
 
     iter_train_loader = iter(train_loader)
-    iter_val_loader = iter(val_loader)
     with display_execution_time("Warming up dataloader", print_output=is_main_process):
         # First batch takes longer; warm it up before the timed loop.
         next(iter_train_loader)
@@ -146,6 +172,11 @@ def train(cfg: DictConfig) -> None:
     start_step = _resume(cfg, checkpoint_manager, ema_latent_mean, ema_latent_std)
 
     losses: dict[str, torch.Tensor] = {}
+    # Start the timed budget only after every rank has loaded state and reached the same boundary.
+    if is_distributed:
+        dist.barrier()
+    training_start_time = time.monotonic()
+    max_duration_hours = cfg.run.get("max_duration_hours")
     iter_num = start_step - 1  # so the final save below is well-defined even if the loop never runs
     for iter_num in range(start_step, int(cfg.run.steps)):
         step_start_time = time.monotonic()
@@ -179,15 +210,17 @@ def train(cfg: DictConfig) -> None:
             stats["train/latent_std"] = ema_latent_std.compute()
             if is_main_process:
                 stats["System/step_ms"] = (time.monotonic() - step_start_time) * 1000
+                stats["System/elapsed_wall_seconds"] = time.monotonic() - training_start_time
                 stats |= {f"grad_norm/{k}": v.item() for k, v in loss.backward_metrics.items()}
                 logger.info(f"Step {iter_num}: total loss {stats['train/loss_total']:.4f}")
                 _wandb_log(stats, step=iter_num)
+                _log_jsonl(cfg, {"kind": "train", "step": iter_num, **stats})
 
         if periodic_event(
             iter_num, cfg.validation.val_every, cfg.run.steps, include_0=cfg.validation.val_first
         ):
             with checkpoint_manager.model_ema.average_parameters():
-                run_validation(cfg, device, raw_model, iter_val_loader, loss, iter_num)
+                run_validation(cfg, device, raw_model, iter(val_loader), loss, iter_num)
 
         if periodic_event(iter_num, cfg.run.checkpoint_every, cfg.run.steps, include_0=False):
             if is_main_process:
@@ -201,11 +234,41 @@ def train(cfg: DictConfig) -> None:
         if is_distributed:
             dist.barrier()
 
+        local_time_limit_reached = (
+            max_duration_hours is not None
+            and time.monotonic() - training_start_time >= float(max_duration_hours) * 3600
+        )
+        time_limit_reached = (
+            broadcast_main_process_bool(local_time_limit_reached, device=device)
+            if max_duration_hours is not None
+            else False
+        )
+        if time_limit_reached:
+            if is_main_process:
+                logger.info(
+                    "Reached run.max_duration_hours=%.3f after step %d; saving final checkpoint.",
+                    float(max_duration_hours),
+                    iter_num,
+                )
+                _log_jsonl(
+                    cfg,
+                    {
+                        "kind": "time_limit",
+                        "step": iter_num,
+                        "elapsed_wall_seconds": time.monotonic() - training_start_time,
+                    },
+                )
+            break
+
     if is_main_process and iter_num >= start_step:  # skip when resuming an already-finished run
         checkpoint_manager.maybe_save_checkpoint(
             iter_num, extra_data=_extra_data(iter_num, losses, ema_latent_mean, ema_latent_std), final=True
         )
     logger.info("Done training")
+    if is_distributed:
+        # Keep peers alive until rank 0 atomically publishes the final model and training state.
+        dist.barrier()
+        dist.destroy_process_group()
 
 
 def _extra_data(
@@ -291,27 +354,37 @@ def _resume(
 
 def _create_dataloaders(cfg: DictConfig, model: VideoCodec):
     common = dict(
+        dataset_backend=cfg.dataset.get("backend", "rocket_science"),
+        map_slug=cfg.dataset.get("map_slug"),
+        group_mode=cfg.dataset.get("group_mode"),
         clip_len=model.config.encoder.video.timesteps,
         target_fps=model.config.encoder.video.fps,
         n_players=cfg.dataset.n_players,
         num_workers=cfg.dataloader.num_workers,
         shuffle_buffer_size=cfg.dataloader.shuffle_buffer_size,
+        prefetch_factor=cfg.dataloader.get("prefetch_factor", 2),
+        persistent_workers=cfg.dataloader.get("persistent_workers", False),
+        pin_memory=cfg.dataloader.get("pin_memory"),
         frame_size=_frame_size(cfg),
         valid_keys=list(cfg.actions.valid_keys),
         infinite=True,
     )
     train_loader = create_loader(
         index_path=cfg.dataset.train_index,
+        split=cfg.dataset.get("train_split", "train"),
         batch_size=cfg.run.batch_size,
         seed=cfg.run.seed,
         exclude_replays=cfg.dataset.exclude_replays,
+        shuffle=True,
         **common,
     )
     val_loader = create_loader(
         index_path=cfg.dataset.test_index,
+        split=cfg.dataset.get("test_split", "test"),
         batch_size=cfg.validation.batch_size or cfg.run.batch_size,
         seed=37,
         exclude_replays=True,
+        shuffle=False,
         **common,
     )
     return train_loader, val_loader
@@ -359,6 +432,15 @@ def run_validation(
             f"Validation at step {iter_num}: " + ", ".join(f"{k}={v:.4f}" for k, v in metrics.items())
         )
         _wandb_log({f"test/{k}": v for k, v in metrics.items()}, step=iter_num)
+        _log_jsonl(
+            cfg,
+            {
+                "kind": "validation",
+                "step": iter_num,
+                "duration_seconds": time.time() - t1,
+                **{f"test/{k}": v for k, v in metrics.items()},
+            },
+        )
 
     model.train()
     if is_distributed:

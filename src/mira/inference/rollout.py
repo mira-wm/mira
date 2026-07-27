@@ -6,12 +6,9 @@ is the shared core of the latency benchmark (:mod:`scripts.bench_wm_speed`) and 
 denoise-speed measurement, and it is the determinism anchor the equality harness depends on: a fixed
 seed + ``noise_level=0.0`` + a fixed schedule reproduces the generated latents exactly.
 
-The per-step action-offset arithmetic is *not* re-derived here -- it is read off the model so the two
-model variants stay the single source of truth:
-
-* single-player (:class:`LatentWorldModel`): the action window starts at ``off = atd - 1``, and
-* multiplayer (:class:`MultiWrapperWorldModel`): the window starts at offset ``0`` and the per-player
-  encoded actions are combined via the model's own ``_combine_player_actions``.
+The per-step action window starts at ``off = atd - 1`` for both model variants, matching their
+training and inference paths. Multiplayer additionally combines the per-player encoded streams via
+the model's own ``_combine_player_actions``.
 
 This mirrors each model's ``inference`` method exactly; if those loops change, this helper must follow.
 """
@@ -60,22 +57,18 @@ def _encode_window_actions(
 ) -> Tensor:
     """Encode the action conditioning for the denoise window starting at latent index ``start``.
 
-    Delegates the offset to the model variant: single-player applies the ``off = atd - 1`` shift,
-    multiplayer slices at offset ``0`` and combines the per-player streams. Returns ``(b, t_a, d)``
-    conditioning ready for ``denoise_streaming``.
+    Applies the same ``off = atd - 1`` shift as both model variants' inference implementations,
+    then routes per-player streams for multiplayer. Returns global ``(b,t_a,d)`` or spatial
+    ``(b,t_a,h,w,d)`` conditioning ready for ``denoise_streaming``.
     """
     atd = inner.action_temporal_downsampling
-    if _is_multiplayer(model):
-        action_start = start * atd
-        action_end = (start + window_size - 1) * atd
-        a_flat = inner.action_encoder(batch.actions.slice_time(action_start, action_end)).clone()
-        return cast("MultiWrapperWorldModel", model)._combine_player_actions(a_flat)
-
     off = atd - 1
     action_start = start * atd + off
     action_end = (start + window_size - 1) * atd + off
-    # ``.clone()`` because the slice is a view and torch.compile dislikes aliasing the kv-cache inputs.
-    return inner.action_encoder(batch.actions.slice_time(action_start, action_end)).clone()
+    encoded = inner.action_encoder(batch.actions.slice_time(action_start, action_end)).clone()
+    if _is_multiplayer(model):
+        return cast("MultiWrapperWorldModel", model)._combine_player_actions(encoded)
+    return encoded
 
 
 @torch.no_grad()

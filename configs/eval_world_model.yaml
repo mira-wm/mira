@@ -27,4 +27,5 @@ world_model_metrics:
   eval_temporal_downsampling: null
   compile: false
   dino_max_chunk_size: 128  # max frames per DINO forward pass, reduces peak memory
+  dino_model: dinov3_vitb16
   num_viz_samples: 8  # how many eval samples to visualize (logged to W&B)

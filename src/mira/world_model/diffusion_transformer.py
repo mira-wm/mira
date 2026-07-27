@@ -139,7 +139,20 @@ class DiffusionTransformer(nn.Module):
             )
             z_t = z_t + self.past_proj(clean_past)
 
-        a = rearrange(a, "b t c -> b t 1 1 c").repeat(1, 1, h, w, 1)
+        if a.ndim == 3:
+            a = rearrange(a, "b t c -> b t 1 1 c").repeat(1, 1, h, w, 1)
+        elif a.ndim == 5:
+            expected = (b, t, h, w, z_t.shape[-1])
+            if tuple(a.shape) != expected:
+                raise ValueError(
+                    "Spatial action conditioning must match the projected latent grid: "
+                    f"expected {expected}, got {tuple(a.shape)}"
+                )
+        else:
+            raise ValueError(
+                "Action conditioning must have shape (b,t,d) or (b,t,h,w,d), "
+                f"got rank {a.ndim} and shape {tuple(a.shape)}"
+            )
 
         tau_emb = self.diffusion_time_embedding(tau)  # (b, t, 1, 1, c)
         if self.diffusion_time_embedding_delta is not None:

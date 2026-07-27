@@ -18,10 +18,11 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from typing import Literal
 
 import torch
 import torch.nn as nn
-from einops import rearrange
+from einops import rearrange, repeat
 from pydantic import BaseModel, ConfigDict
 from torch import Tensor
 from tqdm import tqdm
@@ -44,6 +45,7 @@ class MultiWrapperWorldModelConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     n_players: int
+    action_routing: Literal["global_mean", "spatial"] = "global_mean"
     wm_config: LatentWorldModelConfig
 
 
@@ -57,6 +59,7 @@ class MultiWrapperWorldModel(nn.Module):
     def __init__(self, config: MultiWrapperWorldModelConfig) -> None:
         super().__init__()
         self.n_players = config.n_players
+        self.action_routing = config.action_routing
 
         # The inner world model's video resolution is configured for the tiled (multi-player) setup,
         # but the codec runs per player so it must keep the original (single-player) resolution. The
@@ -114,19 +117,48 @@ class MultiWrapperWorldModel(nn.Module):
         """Decode per-player latents ``(b*p, t, h, w, c)`` to per-player video; pass straight through."""
         return self.single_world_model.decode_to_video(z)
 
-    def _combine_player_actions(self, a_flat: Tensor) -> Tensor:
-        """Combine per-player encoded actions into one conditioning stream.
+    def _project_player_actions(self, a_flat: Tensor) -> Tensor:
+        """Add player identity and project each encoded action stream independently.
 
         Args:
             a_flat: ``(b*p, t_a, d)`` per-player encoded actions, players contiguous within each group.
 
         Returns:
-            ``(b, t_a, d)`` combined actions (player embedding added, projected, then averaged).
+            ``(b, p, t_a, d)`` projected per-player actions.
         """
         a = rearrange(a_flat, "(b p) t d -> b p t d", p=self.n_players)
         a = a + self.player_embedding[None, :, None, :]
-        a = self.player_action_projection(a)
-        return a.mean(dim=1)
+        return self.player_action_projection(a)
+
+    def _combine_player_actions(self, a_flat: Tensor) -> Tensor:
+        """Route projected player actions into the inner diffusion transformer.
+
+        ``global_mean`` preserves released MIRA checkpoint behavior: the player axis is averaged
+        into one ``(b,t,d)`` vector and broadcast over the complete tiled latent grid.
+
+        ``spatial`` preserves player identity explicitly: player ``p``'s ``(b,t,d)`` stream is
+        broadcast only over player ``p``'s latent height band, producing ``(b,t,p*h,w,d)``. Spatial
+        self-attention can still exchange information across POV bands, but every visual token starts
+        with the action conditioning aligned to its source player.
+        """
+        a = self._project_player_actions(a_flat)
+        if self.action_routing == "global_mean":
+            return a.mean(dim=1)
+        if self.action_routing != "spatial":
+            raise ValueError(f"Unsupported action_routing={self.action_routing!r}")
+
+        tiled_height = self.world_model.latent_height
+        if tiled_height % self.n_players:
+            raise ValueError(
+                f"Tiled latent height {tiled_height} is not divisible by n_players={self.n_players}"
+            )
+        player_height = tiled_height // self.n_players
+        return repeat(
+            a,
+            "b p t d -> b t (p h) w d",
+            h=player_height,
+            w=self.world_model.latent_width,
+        )
 
     def forward(self, batch: VideoActionBatch, *args, **kwargs) -> dict[str, Tensor]:
         swm = self.single_world_model
@@ -383,7 +415,12 @@ class MultiWrapperWorldModel(nn.Module):
 
     @classmethod
     def load_from_checkpoint(
-        cls, checkpoint_path: str | Path, device: str | torch.device | None = None, **kwargs
+        cls,
+        checkpoint_path: str | Path,
+        device: str | torch.device | None = None,
+        *,
+        codec_checkpoint: str | Path | None = None,
+        **kwargs,
     ) -> MultiWrapperWorldModel:
         from omegaconf import OmegaConf  # noqa: PLC0415 -- optional dep, used only here
 
@@ -396,9 +433,13 @@ class MultiWrapperWorldModel(nn.Module):
             )
 
         config_raw = OmegaConf.load(config_path)
-        config = MultiWrapperWorldModelConfig.model_validate(
-            _config_dict_from_yaml(config_raw.model.architecture.config)
-        )
+        config_dict = _config_dict_from_yaml(config_raw.model.architecture.config)
+        if codec_checkpoint is not None:
+            wm_config = config_dict.get("wm_config")
+            if not isinstance(wm_config, dict):
+                raise TypeError("expected a mapping at model.architecture.config.wm_config")
+            wm_config["codec_checkpoint"] = str(Path(codec_checkpoint).resolve())
+        config = MultiWrapperWorldModelConfig.model_validate(config_dict)
         model = cls(config)
         model.to(device)
 

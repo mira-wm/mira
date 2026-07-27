@@ -1,0 +1,41 @@
+defaults:
+  - latent_world_model@architecture.config.wm_config: cs2_small
+
+architecture:
+  _target_: mira.world_model.multi_wrapper_world_model.MultiWrapperWorldModel
+  _convert_: all
+
+  config:
+    _target_: mira.world_model.multi_wrapper_world_model.MultiWrapperWorldModelConfig
+    n_players: 10
+    # Preserve the player-to-POV action correspondence instead of globally averaging ten streams.
+    action_routing: spatial
+    wm_config:
+      _target_: mira.world_model.config.LatentWorldModelConfig
+      actions: ${dataset.actions}
+      video:
+        _target_: mira.ml.image_config.ImageConfig
+        height: 168
+        width: 308
+        channels: 3
+        timesteps: 16
+        fps: 8
+      codec_checkpoint: null
+      latent_mean_std: null
+
+      patch_size: 1
+      n_register_tokens: 0
+      attention_gating: true
+      n_context_frames: 8
+      dropout_action_prob: 0.1
+      max_mouse_movement: 180.0
+      # Keep action dropout semantics identical to the single model for this controlled comparison.
+      dropout_action_per_player: false
+      learned_temporal_pool: true
+      causal: true
+      use_codec_posterior_mean: true
+      activation_checkpointing: true
+      ada_attn_ln: true
+      psd_loss_prob: 0.0
+      psd_weight: 0.0
+      use_clean_past: true

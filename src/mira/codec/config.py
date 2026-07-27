@@ -31,7 +31,7 @@ class StridedConvBottleneckConfig(BaseModel):
 
 
 class RAEEncoderConfig(BaseModel):
-    """Frozen DINOv3 backbone + a strided-conv bottleneck (RAEv2).
+    """Frozen DINO backbone + a strided-conv bottleneck (RAEv2).
 
     Aggregates intermediate DINOv3 layers (``mean(features at indices) + features[-1]``) when
     ``aggregation_layers`` is set, then projects to the latent through the strided-conv bottleneck.
@@ -40,7 +40,7 @@ class RAEEncoderConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     latent_dim: int
-    # Name of the DINOv3 hub variant used as the frozen backbone (e.g. ``dinov3_vitl16``).
+    # Name of the DINO hub variant used as the frozen backbone (e.g. ``dinov3_vitl16``).
     rae_model: str
     video: ImageConfig
 

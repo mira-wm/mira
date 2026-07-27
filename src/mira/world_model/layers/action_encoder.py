@@ -36,7 +36,7 @@ class ActionEncoder(torch.nn.Module):
         dim: int,
         temporal_downsampling: int,
         dropout_prob: float = 0.0,
-        max_mouse_movement: int = 2048,
+        max_mouse_movement: float = 2048.0,
         learned_temporal_pool: bool = True,
         dropout_action_per_player: bool = False,
         key_field_names: list[str] | None = None,

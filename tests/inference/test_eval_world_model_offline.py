@@ -12,6 +12,7 @@ import importlib.util
 import math
 import os
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import torch
@@ -63,8 +64,10 @@ def test_validation_loss_multi_offline(monkeypatch) -> None:
 def test_measure_denoise_speed_single_offline(monkeypatch) -> None:
     model = build_world_model(monkeypatch)
     batch = make_batch(batch_size=1)
+    original_video = batch.video.clone()
     result = EVAL.measure_denoise_speed(model, batch, DETERMINISTIC, n_frames=2)
     assert result["denoise_latent_fps"] > 0
+    assert torch.equal(batch.video, original_video)
 
 
 def test_measure_denoise_speed_multi_offline(monkeypatch) -> None:
@@ -80,11 +83,156 @@ def test_load_eval_metrics_config_reads_yaml_and_overrides() -> None:
     # Defaults from configs/eval_world_model.yaml.
     assert config.num_samples == 2048
     assert config.compile is False
+    assert config.dino_model == "dinov3_vitb16"
     assert config.inference.schedule_type == "linear"
     assert config.inference.noise_level == 0.0
 
     overridden = EVAL.load_eval_metrics_config(num_samples=4, no_compile=True)
     assert overridden.num_samples == 4
+
+
+@pytest.mark.parametrize(
+    ("n_samples", "batch_size", "expected"),
+    [(1, 1, 1), (100, 10, 10), (52, 1, 52)],
+)
+def test_exact_num_batches(n_samples: int, batch_size: int, expected: int) -> None:
+    assert EVAL._exact_num_batches("samples", n_samples, batch_size) == expected
+
+
+@pytest.mark.parametrize(("n_samples", "batch_size"), [(0, 1), (10, 0), (11, 10)])
+def test_exact_num_batches_rejects_ambiguous_counts(n_samples: int, batch_size: int) -> None:
+    with pytest.raises(ValueError):
+        EVAL._exact_num_batches("samples", n_samples, batch_size)
+
+
+def test_window_mode_cli_is_preregistered(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "sys.argv",
+        ["eval_world_model_offline.py", "checkpoint.pth", "--window-mode", "first-death"],
+    )
+    assert EVAL.parse_args().window_mode == "first-death"
+
+
+def test_eval_loader_reuses_recorded_dataloader_tuning(monkeypatch) -> None:
+    class AttrDict(dict):
+        __getattr__ = dict.__getitem__
+
+    captured = {}
+    monkeypatch.setattr(
+        "mira.data.training_loader.create_loader",
+        lambda **kwargs: captured.update(kwargs) or "loader",
+    )
+    cfg = SimpleNamespace(
+        dataset=AttrDict(
+            test_index="/dataset",
+            backend="counterstrike1k",
+            map_slug="dust2",
+            group_mode="single",
+            frame_size=[168, 308],
+        ),
+        dataloader=AttrDict(
+            num_workers=8,
+            shuffle_buffer_size=100,
+            prefetch_factor=3,
+            persistent_workers=True,
+            pin_memory=False,
+        ),
+    )
+    model = SimpleNamespace(
+        n_players=1,
+        config=SimpleNamespace(
+            video=SimpleNamespace(fps=8),
+            actions=SimpleNamespace(target_fps=8, valid_keys=["FORWARD"]),
+        ),
+    )
+
+    assert (
+        EVAL._build_loader(
+            cfg,
+            model,
+            split="val",
+            group_mode="single",
+            clip_len=16,
+            batch_size=10,
+            seed=37,
+        )
+        == "loader"
+    )
+    assert captured["num_workers"] == 8
+    assert captured["prefetch_factor"] == 3
+    assert captured["persistent_workers"] is True
+    assert captured["pin_memory"] is False
+
+
+def test_action_modes_are_deterministic_and_do_not_mutate_input() -> None:
+    batch = make_batch(batch_size=2, n_frames=4, n_actions=4)
+    batch.actions.key_presses[0].fill_(1)
+    batch.actions.key_presses[1].fill_(2)
+    batch.actions.mouse_movements[0, :, 0] = torch.arange(4)
+    batch.actions.mouse_movements[1, :, 0] = 10 + torch.arange(4)
+    original = batch.clone()
+
+    zero = EVAL._apply_action_mode(batch, "zero")
+    batch_shifted = EVAL._apply_action_mode(batch, "batch-shifted")
+    time_shifted = EVAL._apply_action_mode(batch, "time-shifted")
+
+    assert torch.count_nonzero(zero.actions.key_presses) == 0
+    assert torch.count_nonzero(zero.actions.mouse_movements) == 0
+    assert torch.equal(batch_shifted.actions.key_presses[0], original.actions.key_presses[1])
+    assert torch.equal(
+        time_shifted.actions.mouse_movements[0],
+        original.actions.mouse_movements[0].roll(shifts=2, dims=0),
+    )
+    assert torch.equal(batch.video, original.video)
+    assert torch.equal(batch.actions.key_presses, original.actions.key_presses)
+    assert torch.equal(batch.actions.mouse_movements, original.actions.mouse_movements)
+
+
+def test_round_shifted_actions_use_next_round_and_same_pov_slots() -> None:
+    first = make_batch(batch_size=2, n_frames=4, n_actions=4)
+    second = make_batch(batch_size=2, n_frames=4, n_actions=4)
+    first.video.fill_(3)
+    first.actions.key_presses.fill_(1)
+    second.video.fill_(7)
+    second.actions.key_presses.fill_(2)
+    first_metadata = [
+        SimpleNamespace(
+            round_id="round_0",
+            sample_key=f"round_0_p{pov}",
+            perspective=pov,
+        )
+        for pov in range(2)
+    ]
+    second_metadata = [
+        SimpleNamespace(
+            round_id="round_1",
+            sample_key=f"round_1_p{pov}",
+            perspective=pov,
+        )
+        for pov in range(2)
+    ]
+
+    shifted, metadata = next(
+        EVAL._action_mode_iter(
+            iter(
+                [
+                    (first, first_metadata),
+                    (second, second_metadata),
+                ]
+            ),
+            "round-shifted",
+        )
+    )
+
+    assert torch.equal(shifted.video, first.video)
+    assert torch.equal(
+        shifted.actions.key_presses,
+        second.actions.key_presses,
+    )
+    assert [item.perspective for item in metadata] == [0, 1]
+    assert {item.action_donor_round_id for item in metadata} == {"round_1"}
+    assert [item.action_donor_sample_key for item in metadata] == ["round_1_p0", "round_1_p1"]
+    assert torch.equal(first.actions.key_presses, torch.ones_like(first.actions.key_presses))
 
 
 def test_world_model_metrics_and_viz_offline(monkeypatch, tmp_path) -> None:
@@ -148,10 +296,15 @@ def test_offline_eval_end_to_end_real_checkpoint() -> None:
     model, _ = load_world_model(checkpoint, device=device)
     model = model.eval()
 
-    n_players = getattr(model, "n_players", 1)
-    batch_size = (cfg.validation.batch_size or cfg.run.batch_size) * n_players
+    batch_size = cfg.validation.batch_size or cfg.run.batch_size
     val_loader = EVAL._build_loader(
-        cfg, model, clip_len=model.config.video.timesteps * 2, batch_size=batch_size, seed=37
+        cfg,
+        model,
+        split=cfg.dataset.get("test_split", "test"),
+        group_mode=cfg.dataset.get("group_mode"),
+        clip_len=model.config.video.timesteps,
+        batch_size=batch_size,
+        seed=37,
     )
     metrics = EVAL.run_validation_loss(model, iter(val_loader), device, n_batches=1)
     assert math.isfinite(metrics["loss_total"])
