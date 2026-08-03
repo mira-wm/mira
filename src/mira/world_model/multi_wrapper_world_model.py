@@ -71,7 +71,9 @@ class MultiWrapperWorldModel(nn.Module):
 
         action_dim = self.single_world_model.action_encoder.dim
         self.player_embedding = nn.Parameter(torch.randn(config.n_players, action_dim) * 0.02)
-        self.player_action_projection = nn.Sequential(nn.SiLU(), nn.Linear(action_dim, action_dim))
+        self.player_action_projection = nn.Sequential(
+            nn.SiLU(), nn.Linear(config.n_players * action_dim, action_dim)
+        )
 
     @property
     def config(self) -> LatentWorldModelConfig:
@@ -121,12 +123,13 @@ class MultiWrapperWorldModel(nn.Module):
             a_flat: ``(b*p, t_a, d)`` per-player encoded actions, players contiguous within each group.
 
         Returns:
-            ``(b, t_a, d)`` combined actions (player embedding added, projected, then averaged).
+            ``(b, t_a, d)`` combined actions: the player embedding is added to each player's actions,
+            the players are then concatenated channel-wise (``p*d``) and projected back down to ``d``.
         """
         a = rearrange(a_flat, "(b p) t d -> b p t d", p=self.n_players)
         a = a + self.player_embedding[None, :, None, :]
-        a = self.player_action_projection(a)
-        return a.mean(dim=1)
+        a = rearrange(a, "b p t d -> b t (p d)")
+        return self.player_action_projection(a)
 
     def forward(self, batch: VideoActionBatch, *args, **kwargs) -> dict[str, Tensor]:
         swm = self.single_world_model
