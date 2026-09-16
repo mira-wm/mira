@@ -47,7 +47,7 @@ architecture:
       # Fine-tuning from a single-player baseline requires matching the baseline's architecture
       # values (patch size, register tokens, attention gating).
       patch_size: 1
-      n_register_tokens: 0
+      n_register_tokens: 1
       attention_gating: true
 
       n_context_frames: 78  # only used during inference

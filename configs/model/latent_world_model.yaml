@@ -34,7 +34,7 @@ architecture:
     latent_mean_std: null
 
     patch_size: 1
-    n_register_tokens: 0
+    n_register_tokens: 1
     attention_gating: true
 
     n_context_frames: 39  # only used during inference
