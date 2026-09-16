@@ -47,6 +47,7 @@ validation:
   val_every: "2%"
 
 optim:
+  max_grad_norm: 1.0  # global grad-norm clip; 0 to disable
   optimizer:
     lr: 1e-4
     betas: [0.9, 0.95]

@@ -162,6 +162,8 @@ def train(cfg: DictConfig) -> None:
             losses = model(batch)
 
         losses["loss_total"].backward()
+        if cfg.optim.max_grad_norm:
+            grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.optim.max_grad_norm)
         optimizer_step()
         checkpoint_manager.model_ema.step()
 
@@ -172,6 +174,8 @@ def train(cfg: DictConfig) -> None:
             # All ranks must call get_stats() so the inner all_reduce completes.
             stats = training_tracker.get_stats(step=iter_num)
             stats["train/learning_rate"] = optimizer.param_groups[0]["lr"]
+            if cfg.optim.max_grad_norm:
+                stats["train/grad_norm"] = grad_norm.item()
             if is_main_process:
                 stats["System/step_ms"] = (time.monotonic() - step_start_time) * 1000
                 logger.info(f"Step {iter_num}: total loss {stats['train/loss_total']:.4f}")
