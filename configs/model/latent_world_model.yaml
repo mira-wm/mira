@@ -35,6 +35,7 @@ architecture:
 
     patch_size: 1
     n_register_tokens: 1
+    spatial_register: true
     attention_gating: true
 
     n_context_frames: 39  # only used during inference

@@ -4,6 +4,10 @@
 the per-frame action + diffusion-time conditioning, runs a stack of :class:`AdaSTBlock`s with
 temporal RoPE and spatial 2D RoPE, and predicts the flow-matching velocity. It supports a streaming
 kv-cache for autoregressive inference and optional clean-past conditioning.
+
+Two kinds of register tokens are supported: ``n_register_tokens`` learned frames prepended on the
+time axis (kept at the front of the kv-cache), and a ``spatial_register`` token appended as an extra
+row of every frame's spatial grid. Both are removed before the output head.
 """
 
 from __future__ import annotations
@@ -11,7 +15,7 @@ from __future__ import annotations
 import torch
 import torch.nn as nn
 import torch.utils.checkpoint
-from einops import rearrange
+from einops import rearrange, repeat
 from torch import Tensor
 
 from mira.ml.attention import SelfAttentionConfig
@@ -49,6 +53,12 @@ class DiffusionTransformer(nn.Module):
             self.register_tokens = nn.Parameter(
                 0.02 * torch.randn(1, self.n_register_tokens, 1, 1, hidden_dim)
             )
+
+        # Spatial register: one learned token appended as the last row of every frame's grid, so it
+        # sits at spatial RoPE position (latent_height, x). Sliced off before the head.
+        self.spatial_register_token = None
+        if config.spatial_register:
+            self.spatial_register_token = nn.Parameter(0.02 * torch.randn(hidden_dim))
 
         self.latent_tokens_proj = nn.Linear(latent_dim * self.patch_size**2, hidden_dim)
         # Only created when past-conditioning is enabled so that checkpoints trained
@@ -139,6 +149,11 @@ class DiffusionTransformer(nn.Module):
             )
             z_t = z_t + self.past_proj(clean_past)
 
+        if self.spatial_register_token is not None:
+            spatial_register = repeat(self.spatial_register_token, "c -> b t 1 w c", b=b, t=t, w=w)
+            z_t = torch.cat([z_t, spatial_register], dim=2)
+            h = z_t.shape[2]
+
         a = rearrange(a, "b t c -> b t 1 1 c").repeat(1, 1, h, w, 1)
 
         tau_emb = self.diffusion_time_embedding(tau)  # (b, t, 1, 1, c)
@@ -192,6 +207,9 @@ class DiffusionTransformer(nn.Module):
 
         if (self.register_tokens is not None) and (kv_caches is None):
             sequence = sequence[:, self.n_register_tokens :]
+
+        if self.spatial_register_token is not None:
+            sequence = sequence[:, :, :-1]
 
         pred_v = self.head(sequence)
 

@@ -63,7 +63,11 @@ class LatentWorldModelConfig(BaseModel):
     # deterministic RAE codec the posterior mean equals the sample, so this reduces to reading z.
     use_codec_posterior_mean: bool = False
 
+    # Learned frames prepended on the time axis that act as attention sinks in temporal attention.
     n_register_tokens: int = 0
+    # A learned token appended as an extra bottom row of every frame's spatial grid. It takes part
+    # in spatial and temporal attention and is dropped before the output head.
+    spatial_register: bool = False
 
     patch_size: int = 1
     attention_gating: bool = False
